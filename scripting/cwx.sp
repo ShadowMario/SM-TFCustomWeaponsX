@@ -64,8 +64,14 @@ public void OnPluginStart() {
 	Handle dtGetLoadoutItem = DHookCreateFromConf(hGameConf, "CTFPlayer::GetLoadoutItem()");
 	DHookEnableDetour(dtGetLoadoutItem, true, OnGetLoadoutItemPost);
 	
-	delete hGameConf;
+	Handle dtManageRegularWeapons = DHookCreateFromConf(hGameConf, "CTFPlayer::ManageRegularWeapons()");
+	if (!dtManageRegularWeapons) {
+		SetFailState("Failed to create detour %s", "CTFPlayer::ManageRegularWeapons()");
+	}
+	DHookEnableDetour(dtManageRegularWeapons, false, OnManageRegularWeaponsPre);
+	DHookEnableDetour(dtManageRegularWeapons, true, OnManageRegularWeaponsPost);
 	
+	delete hGameConf;
 	
 	HookUserMessage(GetUserMessageId("PlayerLoadoutUpdated"), OnPlayerLoadoutUpdated);
 	
@@ -230,7 +236,6 @@ Action OnPlayerLoadoutUpdated(UserMsg msg_id, BfRead msg, const int[] players,
  * avoid returning a nullptr.
  */
 MRESReturn OnGetLoadoutItemPost(int client, Handle hReturn, Handle hParams) {
-	// TODO: work around invalid class items being invalidated
 	int playerClass = DHookGetParam(hParams, 1);
 	int loadoutSlot = DHookGetParam(hParams, 2);
 	
@@ -267,6 +272,55 @@ MRESReturn OnGetLoadoutItemPost(int client, Handle hReturn, Handle hParams) {
 	
 	DHookSetReturn(hReturn, pStoredItemView);
 	return MRES_Supercede;
+}
+
+MRESReturn OnManageRegularWeaponsPre(int client, Handle hParams) {
+	TFClassType playerClass = TF2_GetPlayerClass(client);
+	
+	if (playerClass != TFClass_Scout) {
+		return MRES_Ignored;
+	}
+	int tempLookup[NUM_ITEMS] = { 13, 22, 0, TF_ITEMDEF_DEFAULT, TF_ITEMDEF_DEFAULT };
+	
+	for (int s; s < NUM_ITEMS; s++) {
+		int storedItem = g_CurrentLoadoutEntity[client][playerClass][s];
+		if (!IsValidEntity(storedItem)) {
+			continue;
+		}
+		
+		// replace the itemdef and classname with ones actually valid for that class
+		char classname[64];
+		TF2Econ_GetItemClassName(tempLookup[s], classname, sizeof(classname));
+		
+		SetEntProp(storedItem, Prop_Send, "m_iItemDefinitionIndex", tempLookup[s]);
+		SetEntPropString(storedItem, Prop_Data, "m_iClassname", classname);
+	}
+	return MRES_Ignored;
+}
+
+
+MRESReturn OnManageRegularWeaponsPost(int client, Handle hParams) {
+	TFClassType playerClass = TF2_GetPlayerClass(client);
+	if (playerClass != TFClass_Scout) {
+		return MRES_Ignored;
+	}
+	
+	for (int s; s < NUM_ITEMS; s++) {
+		int storedItem = g_CurrentLoadoutEntity[client][playerClass][s];
+		if (!IsValidEntity(storedItem)) {
+			continue;
+		}
+		
+		CustomItemDefinition item;
+		if (!g_CustomItems.GetArray(g_CurrentLoadout[client][playerClass][s],
+				item, sizeof(item))) {
+			continue;
+		}
+		
+		SetEntProp(storedItem, Prop_Send, "m_iItemDefinitionIndex", item.defindex);
+		SetEntPropString(storedItem, Prop_Data, "m_iClassname", item.className);
+	}
+	return MRES_Ignored;
 }
 
 /**
